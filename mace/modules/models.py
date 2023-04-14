@@ -436,20 +436,20 @@ class BOTNet(torch.nn.Module):
             else:
                 self.readouts.append(LinearReadoutBlock(inter.irreps_out))
 
-    def forward(self, data: AtomicData, training=False) -> Dict[str, Any]:
+    def forward(self, data: Dict[str, torch.Tensor], training=False) -> Dict[str, Any]:
         # Setup
-        data.positions.requires_grad = True
+        data["positions"].requires_grad_(True)
 
         # Atomic energies
-        node_e0 = self.atomic_energies_fn(data.node_attrs)
+        node_e0 = self.atomic_energies_fn(data["node_attrs"])
         e0 = scatter_sum(
-            src=node_e0, index=data.batch, dim=-1, dim_size=data.num_graphs
+            src=node_e0, index=data["batch"], dim=-1, dim_size=data["batch"][-1]+1
         )  # [n_graphs,]
 
         # Embeddings
-        node_feats = self.node_embedding(data.node_attrs)
+        node_feats = self.node_embedding(data["node_attrs"])
         vectors, lengths = get_edge_vectors_and_lengths(
-            positions=data.positions, edge_index=data.edge_index, shifts=data.shifts
+            positions=data["positions"], edge_index=data["edge_index"], shifts=data["shifts"]
         )
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats = self.radial_embedding(lengths)
@@ -458,15 +458,15 @@ class BOTNet(torch.nn.Module):
         energies = [e0]
         for interaction, readout in zip(self.interactions, self.readouts):
             node_feats = interaction(
-                node_attrs=data.node_attrs,
+                node_attrs=data["node_attrs"],
                 node_feats=node_feats,
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
-                edge_index=data.edge_index,
+                edge_index=data["edge_index"],
             )
             node_energies = readout(node_feats).squeeze(-1)  # [n_nodes, ]
             energy = scatter_sum(
-                src=node_energies, index=data.batch, dim=-1, dim_size=data.num_graphs
+                src=node_energies, index=data["batch"], dim=-1, dim_size=data["batch"][-1]+1
             )  # [n_graphs,]
             energies.append(energy)
 
@@ -478,7 +478,7 @@ class BOTNet(torch.nn.Module):
             "energy": total_energy,
             "contributions": contributions,
             "forces": compute_forces(
-                energy=total_energy, positions=data.positions, training=training
+                energy=total_energy, positions=data["positions"], training=training
             ),
         }
 
@@ -497,20 +497,20 @@ class ScaleShiftBOTNet(BOTNet):
             scale=atomic_inter_scale, shift=atomic_inter_shift
         )
 
-    def forward(self, data: AtomicData, training=False) -> Dict[str, Any]:
+    def forward(self, data: Dict[str, torch.Tensor], training=False) -> Dict[str, Any]:
         # Setup
-        data.positions.requires_grad = True
+        data["positions"].requires_grad_(True)
 
         # Atomic energies
-        node_e0 = self.atomic_energies_fn(data.node_attrs)
+        node_e0 = self.atomic_energies_fn(data["node_attrs"])
         e0 = scatter_sum(
-            src=node_e0, index=data.batch, dim=-1, dim_size=data.num_graphs
+            src=node_e0, index=data["batch"], dim=-1, dim_size=data["batch"][-1]+1
         )  # [n_graphs,]
 
         # Embeddings
-        node_feats = self.node_embedding(data.node_attrs)
+        node_feats = self.node_embedding(data["node_attrs"])
         vectors, lengths = get_edge_vectors_and_lengths(
-            positions=data.positions, edge_index=data.edge_index, shifts=data.shifts
+            positions=data["positions"], edge_index=data["edge_index"], shifts=data["shifts"]
         )
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats = self.radial_embedding(lengths)
@@ -519,11 +519,11 @@ class ScaleShiftBOTNet(BOTNet):
         node_es_list = []
         for interaction, readout in zip(self.interactions, self.readouts):
             node_feats = interaction(
-                node_attrs=data.node_attrs,
+                node_attrs=data["node_attrs"],
                 node_feats=node_feats,
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
-                edge_index=data.edge_index,
+                edge_index=data["edge_index"],
             )
 
             node_es_list.append(readout(node_feats).squeeze(-1))  # {[n_nodes, ], }
@@ -536,7 +536,7 @@ class ScaleShiftBOTNet(BOTNet):
 
         # Sum over nodes in graph
         inter_e = scatter_sum(
-            src=node_inter_es, index=data.batch, dim=-1, dim_size=data.num_graphs
+            src=node_inter_es, index=data["batch"], dim=-1, dim_size=data["batch"][-1]+1
         )  # [n_graphs,]
 
         # Add E_0 and (scaled) interaction energy
@@ -545,7 +545,7 @@ class ScaleShiftBOTNet(BOTNet):
         output = {
             "energy": total_e,
             "forces": compute_forces(
-                energy=inter_e, positions=data.positions, training=training
+                energy=inter_e, positions=data["positions"], training=training
             ),
         }
 
@@ -669,7 +669,7 @@ class AtomicDipolesMACE(torch.nn.Module):
 
     def forward(
         self,
-        data: AtomicData,
+        data: Dict[str, torch.Tensor],
         training=False,
         compute_force: bool = False,
         compute_virials: bool = False,
@@ -679,7 +679,7 @@ class AtomicDipolesMACE(torch.nn.Module):
         assert compute_virials is False
         assert compute_stress is False
         # Setup
-        data.positions.requires_grad = True
+        data["positions"].requires_grad_(True)
         if not training:
             for p in self.parameters():
                 p.requires_grad = False
@@ -688,9 +688,9 @@ class AtomicDipolesMACE(torch.nn.Module):
                 p.requires_grad = True
 
         # Embeddings
-        node_feats = self.node_embedding(data.node_attrs)
+        node_feats = self.node_embedding(data["node_attrs"])
         vectors, lengths = get_edge_vectors_and_lengths(
-            positions=data.positions, edge_index=data.edge_index, shifts=data.shifts
+            positions=data["positions"], edge_index=data["edge_index"], shifts=data["shifts"]
         )
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats = self.radial_embedding(lengths)
@@ -701,14 +701,14 @@ class AtomicDipolesMACE(torch.nn.Module):
             self.interactions, self.products, self.readouts
         ):
             node_feats, sc = interaction(
-                node_attrs=data.node_attrs,
+                node_attrs=data["node_attrs"],
                 node_feats=node_feats,
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
-                edge_index=data.edge_index,
+                edge_index=data["edge_index"],
             )
             node_feats = product(
-                node_feats=node_feats, sc=sc, node_attrs=data.node_attrs
+                node_feats=node_feats, sc=sc, node_attrs=data["node_attrs"]
             )
             node_dipoles = readout(node_feats).squeeze(-1)  # [n_nodes,3]
             dipoles.append(node_dipoles)
@@ -720,15 +720,15 @@ class AtomicDipolesMACE(torch.nn.Module):
         atomic_dipoles = torch.sum(contributions_dipoles, dim=-1)  # [n_nodes,3]
         total_dipole = scatter_sum(
             src=atomic_dipoles,
-            index=data.batch.unsqueeze(-1),
+            index=data["batch"].unsqueeze(-1),
             dim=0,
-            dim_size=data.num_graphs,
+            dim_size=data["batch"][-1]+1,
         )  # [n_graphs,3]
         baseline = compute_fixed_charge_dipole(
-            charges=data.charges,
-            positions=data.positions,
-            batch=data.batch,
-            num_graphs=data.num_graphs,
+            charges=data["charges"],
+            positions=data["positions"],
+            batch=data["batch"],
+            num_graphs=data["batch"][-1]+1,
         )  # [n_graphs,3]
         total_dipole = total_dipole + baseline
 
@@ -855,7 +855,7 @@ class EnergyDipolesMACE(torch.nn.Module):
 
     def forward(
         self,
-        data: AtomicData,
+        data: Dict[str, torch.Tensor],
         training=False,
         compute_force: bool = True,
         compute_virials: bool = False,
@@ -865,7 +865,7 @@ class EnergyDipolesMACE(torch.nn.Module):
         assert compute_virials is False
         assert compute_stress is False
         # Setup
-        data.positions.requires_grad = True
+        data["positions"].requires_grad_(True)
         if not training:
             for p in self.parameters():
                 p.requires_grad = False
@@ -874,15 +874,15 @@ class EnergyDipolesMACE(torch.nn.Module):
                 p.requires_grad = True
 
         # Atomic energies
-        node_e0 = self.atomic_energies_fn(data.node_attrs)
+        node_e0 = self.atomic_energies_fn(data["node_attrs"])
         e0 = scatter_sum(
-            src=node_e0, index=data.batch, dim=-1, dim_size=data.num_graphs
+            src=node_e0, index=data["batch"], dim=-1, dim_size=data["batch"][-1]+1
         )  # [n_graphs,]
 
         # Embeddings
-        node_feats = self.node_embedding(data.node_attrs)
+        node_feats = self.node_embedding(data["node_attrs"])
         vectors, lengths = get_edge_vectors_and_lengths(
-            positions=data.positions, edge_index=data.edge_index, shifts=data.shifts
+            positions=data["positions"], edge_index=data["edge_index"], shifts=data["shifts"]
         )
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats = self.radial_embedding(lengths)
@@ -894,20 +894,20 @@ class EnergyDipolesMACE(torch.nn.Module):
             self.interactions, self.products, self.readouts
         ):
             node_feats, sc = interaction(
-                node_attrs=data.node_attrs,
+                node_attrs=data["node_attrs"],
                 node_feats=node_feats,
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
-                edge_index=data.edge_index,
+                edge_index=data["edge_index"],
             )
             node_feats = product(
-                node_feats=node_feats, sc=sc, node_attrs=data.node_attrs
+                node_feats=node_feats, sc=sc, node_attrs=data["node_attrs"]
             )
             node_out = readout(node_feats).squeeze(-1)  # [n_nodes, ]
             # node_energies = readout(node_feats).squeeze(-1)  # [n_nodes, ]
             node_energies = node_out[:, 0]
             energy = scatter_sum(
-                src=node_energies, index=data.batch, dim=-1, dim_size=data.num_graphs
+                src=node_energies, index=data["batch"], dim=-1, dim_size=data["batch"][-1]+1
             )  # [n_graphs,]
             energies.append(energy)
             # node_dipoles = readout(node_feats).squeeze(-1)  # [n_nodes,3]
@@ -923,23 +923,23 @@ class EnergyDipolesMACE(torch.nn.Module):
         atomic_dipoles = torch.sum(contributions_dipoles, dim=-1)  # [n_nodes,3]
         total_dipole = scatter_sum(
             src=atomic_dipoles,
-            index=data.batch.unsqueeze(-1),
+            index=data["batch"].unsqueeze(-1),
             dim=0,
-            dim_size=data.num_graphs,
+            dim_size=data["batch"][-1]+1,
         )  # [n_graphs,3]
         baseline = compute_fixed_charge_dipole(
-            charges=data.charges,
-            positions=data.positions,
-            batch=data.batch,
-            num_graphs=data.num_graphs,
+            charges=data["charges"],
+            positions=data["positions"],
+            batch=data["batch"],
+            num_graphs=data["batch"][-1]+1,
         )  # [n_graphs,3]
         total_dipole = total_dipole + baseline
 
         forces, _, _ = get_outputs(
             energy=total_energy,
-            positions=data.positions,
+            positions=data["positions"],
             displacement=None,
-            cell=data.cell,
+            cell=data["cell"],
             training=training,
             compute_force=compute_force,
             compute_virials=compute_virials,
